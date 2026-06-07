@@ -21,6 +21,7 @@ import httpx
 from crawler.sources.hackernews import fetch_hackernews
 from crawler.sources.rss_feeds import fetch_all_rss
 from crawler.sources.sitemap_blogs import fetch_all_sitemaps
+from crawler.sources.playwright_blogs import fetch_all_playwright
 from crawler.filters import filter_items
 from crawler.models import NewsItem
 from crawler.dedup import DedupStore
@@ -53,6 +54,8 @@ async def run(
             tasks.append(fetch_all_rss(client))
         if "sitemap" in sources:
             tasks.append(fetch_all_sitemaps(client))
+        if "playwright" in sources:
+            tasks.append(fetch_all_playwright())
 
         if tasks:
             results = await asyncio.gather(*tasks)
