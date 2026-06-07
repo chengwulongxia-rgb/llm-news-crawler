@@ -1,0 +1,17 @@
+[project]
+name = "llm-news-crawler"
+version = "0.1.0"
+description = "龍蝦城武 LLM 新聞爬蟲 — 從 HN/Reddit 等來源蒐集 LLM/AI 相關新聞"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28",
+    "pydantic>=2.10",
+]
+
+[project.scripts]
+llm-crawler = "crawler.main:main"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
