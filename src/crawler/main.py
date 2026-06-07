@@ -25,6 +25,7 @@ from crawler.sources.playwright_blogs import fetch_all_playwright
 from crawler.filters import filter_items
 from crawler.models import NewsItem
 from crawler.dedup import DedupStore
+from crawler.article_fetcher import fetch_article
 
 
 def format_collector_output(items: list[NewsItem], date_str: str) -> str:
@@ -124,6 +125,14 @@ def main():
         "--dedup-stats", action="store_true",
         help="顯示去重統計後退出",
     )
+    parser.add_argument(
+        "--fetch", type=str, default=None, metavar="URL",
+        help="擷取單篇文章內文 (輸出 markdown)",
+    )
+    parser.add_argument(
+        "--playwright", action="store_true", dest="force_playwright",
+        help="配合 --fetch，強制使用 Playwright",
+    )
 
     args = parser.parse_args()
 
@@ -140,6 +149,21 @@ def main():
         if dedup_store:
             stats = dedup_store.stats()
             print(json.dumps(stats, ensure_ascii=False, indent=2))
+        return
+
+    # ── Fetch single article mode ──
+    if args.fetch:
+        article = asyncio.run(fetch_article(
+            args.fetch,
+            force_playwright=args.force_playwright,
+        ))
+        if article is None:
+            print(f"❌ 無法擷取文章：{args.fetch}", file=sys.stderr)
+            sys.exit(1)
+        if args.json:
+            print(json.dumps(article.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            print(article.to_markdown())
         return
 
     # Run async
