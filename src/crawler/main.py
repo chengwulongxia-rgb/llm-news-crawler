@@ -93,8 +93,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--sources", nargs="+", default=["hackernews", "rss", "sitemap"],
-        help="新聞來源: hackernews, rss, sitemap (default: all)",
+        "--sources", nargs="+", default=["hackernews", "rss", "sitemap", "playwright"],
+        help="新聞來源: hackernews, rss, sitemap, playwright (default: all)",
     )
     parser.add_argument(
         "--min-score", type=int, default=5,
