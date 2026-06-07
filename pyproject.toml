@@ -5,7 +5,9 @@ description = "龍蝦城武 LLM 新聞爬蟲 — 從 HN/Reddit 等來源蒐集 L
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "beautifulsoup4>=4.14.3",
     "httpx>=0.28",
+    "lxml>=6.1.1",
     "pydantic>=2.10",
 ]
 

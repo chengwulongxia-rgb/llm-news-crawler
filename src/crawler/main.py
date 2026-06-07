@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 import httpx
 
 from crawler.sources.hackernews import fetch_hackernews
+from crawler.sources.rss_feeds import fetch_all_rss
+from crawler.sources.sitemap_blogs import fetch_all_sitemaps
 from crawler.filters import filter_items
 from crawler.models import NewsItem
 from crawler.dedup import DedupStore
@@ -47,6 +49,10 @@ async def run(
         tasks = []
         if "hackernews" in sources:
             tasks.append(fetch_hackernews(client))
+        if "rss" in sources:
+            tasks.append(fetch_all_rss(client))
+        if "sitemap" in sources:
+            tasks.append(fetch_all_sitemaps(client))
 
         if tasks:
             results = await asyncio.gather(*tasks)
@@ -84,8 +90,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--sources", nargs="+", default=["hackernews"],
-        help="新聞來源 (default: hackernews)",
+        "--sources", nargs="+", default=["hackernews", "rss", "sitemap"],
+        help="新聞來源: hackernews, rss, sitemap (default: all)",
     )
     parser.add_argument(
         "--min-score", type=int, default=5,
