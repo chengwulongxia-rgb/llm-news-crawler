@@ -14,7 +14,7 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 
 import httpx
 
@@ -170,7 +170,7 @@ def main():
     items = asyncio.run(run(args.sources, min_score=args.min_score, dedup_store=dedup_store))
     items = items[: args.limit]
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
 
     if args.json:
         output = json.dumps(
