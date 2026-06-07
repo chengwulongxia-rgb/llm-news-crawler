@@ -245,51 +245,39 @@ async def fetch_with_playwright(url: str, timeout: int = 30) -> FetchedArticle |
                     "--disable-blink-features=AutomationControlled",
                 ],
             )
-            context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            # Use default context — custom contexts can break stealth and trigger bot detection
+            page = await browser.new_page()
+            await page.goto(url, wait_until="networkidle", timeout=timeout * 1000)
+            await page.wait_for_timeout(2000)
+
+            html = await page.content()
+            await browser.close()
+
+            soup = _clean_html(html)
+            title = _extract_title(soup)
+            meta = _extract_meta(soup)
+            body_el = _find_body_element(soup)
+
+            if body_el is None:
+                body_el = soup.find("body")
+
+            if body_el is None:
+                return None
+
+            body_text = _body_to_text(body_el)
+
+            if len(body_text) < 100:
+                return None
+
+            return FetchedArticle(
+                url=url,
+                title=title,
+                author=meta["author"],
+                date=meta["date"],
+                body=body_text,
+                site_name=meta["site_name"],
+                method="playwright",
             )
-            page = await context.new_page()
-            # Hide automation signals
-            await page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            """)
-            try:
-                await page.goto(url, wait_until="networkidle", timeout=timeout * 1000)
-                await page.wait_for_timeout(2000)
-
-                html = await page.content()
-                await context.close()
-                await browser.close()
-
-                soup = _clean_html(html)
-                title = _extract_title(soup)
-                meta = _extract_meta(soup)
-                body_el = _find_body_element(soup)
-
-                if body_el is None:
-                    body_el = soup.find("body")
-
-                if body_el is None:
-                    return None
-
-                body_text = _body_to_text(body_el)
-
-                if len(body_text) < 100:
-                    return None
-
-                return FetchedArticle(
-                    url=url,
-                    title=title,
-                    author=meta["author"],
-                    date=meta["date"],
-                    body=body_text,
-                    site_name=meta["site_name"],
-                    method="playwright",
-                )
-
-            finally:
-                await browser.close()
 
     except Exception:
         return None
