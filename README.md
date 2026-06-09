@@ -10,6 +10,7 @@ src/crawler/
 ├── filters.py             # LLM 關鍵詞過濾器 (50+ 關鍵詞)
 ├── dedup.py               # 跨輪次 URL 去重 (48h TTL)
 ├── article_fetcher.py     # 單篇文章擷取 (httpx + Playwright)
+├── hard_fetch.py           # 硬爬模組：arXiv 摘要、HN 討論串、智慧路由
 ├── sources/
 │   ├── hackernews.py      # HN Firebase API
 │   ├── rss_feeds.py       # RSS/Atom feeds (OpenAI, Google, ArXiv×2)
@@ -56,6 +57,13 @@ uv run llm-crawler --fetch "https://文章網址" --playwright
 
 # 輸出 JSON 格式
 uv run llm-crawler --fetch "https://文章網址" --playwright --json
+
+# 智慧擷取（自動辨識網站類型，arXiv/HN/一般網站用最佳方式）
+uv run llm-crawler --fetch-smart "https://arxiv.org/abs/2606.06635"
+uv run llm-crawler --fetch-smart "https://news.ycombinator.com/item?id=48439240"
+
+# 批次擷取（從檔案讀 URL 清單，平行擷取）
+uv run llm-crawler --fetch-batch urls.txt
 
 # 存到檔案
 uv run llm-crawler --fetch "https://文章網址" --playwright -o /tmp/article.md

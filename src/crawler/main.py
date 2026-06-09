@@ -133,6 +133,14 @@ def main():
         "--playwright", action="store_true", dest="force_playwright",
         help="配合 --fetch，強制使用 Playwright",
     )
+    parser.add_argument(
+        "--fetch-smart", type=str, default=None, metavar="URL",
+        help="智慧擷取：自動辨識 arXiv/HN/一般網站，用最佳方式擷取內文",
+    )
+    parser.add_argument(
+        "--fetch-batch", type=str, default=None, metavar="FILE",
+        help="批次擷取：從檔案讀取 URL 清單（每行一個），平行擷取所有文章",
+    )
 
     args = parser.parse_args()
 
@@ -164,6 +172,48 @@ def main():
             print(json.dumps(article.to_dict(), ensure_ascii=False, indent=2))
         else:
             print(article.to_markdown())
+        return
+
+    # ── Smart fetch mode (auto-detect site type) ──
+    if args.fetch_smart:
+        from crawler.hard_fetch import fetch_any
+        content = asyncio.run(fetch_any(args.fetch_smart))
+        if content is None:
+            print(f"❌ 無法擷取文章：{args.fetch_smart}", file=sys.stderr)
+            sys.exit(1)
+        print(content.to_markdown())
+        return
+
+    # ── Batch fetch mode ──
+    if args.fetch_batch:
+        from crawler.hard_fetch import fetch_batch
+
+        # Read URLs from file
+        urls = []
+        with open(args.fetch_batch) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    urls.append(line)
+
+        if not urls:
+            print("❌ 檔案中沒有 URL", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"🔍 開始擷取 {len(urls)} 篇文章...", file=sys.stderr)
+        results = asyncio.run(fetch_batch(urls))
+
+        success_count = 0
+        for url, content in zip(urls, results):
+            if content is None:
+                print(f"\n---\n## ❌ 失敗：{url}\n", file=sys.stderr)
+            else:
+                success_count += 1
+                print(f"\n---\n## ✅ {content.title}\n")
+                print(content.body)
+                print(f"\n*原文：{url}*")
+
+        print(f"\n---\n📊 成功 {success_count}/{len(urls)} 篇", file=sys.stderr)
         return
 
     # Run async
