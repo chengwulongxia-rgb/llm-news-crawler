@@ -20,7 +20,7 @@ SITEMAP_SOURCES = [
     {
         "name": "Anthropic",
         "sitemap_url": "https://www.anthropic.com/sitemap.xml",
-        "url_filters": ["/blog/", "/research/", "/engineering/"],
+        "url_filters": ["/blog/", "/research/", "/engineering/", "/news/"],
         "url_excludes": ["tag/", "category/", "author/", "page/"],
         "score": 35,
     },
@@ -34,11 +34,12 @@ SITEMAP_SOURCES = [
 ]
 
 
-def _parse_sitemap(xml_text: str, source_config: dict) -> list[str]:
-    """Extract article URLs from a sitemap XML.
+def _parse_sitemap(xml_text: str, source_config: dict) -> list[tuple[str, datetime | None]]:
+    """Extract article URLs from a sitemap XML with lastmod dates.
 
     Filters URLs based on url_filters (inclusion) and url_excludes (exclusion).
     url_excludes can contain regular expressions for precise matching.
+    Returns list of (url, lastmod) sorted by lastmod descending (newest first).
     """
     filters = source_config.get("url_filters", [])
     excludes = source_config.get("url_excludes", [])
@@ -83,7 +84,26 @@ def _parse_sitemap(xml_text: str, source_config: dict) -> list[str]:
             if excluded:
                 continue
 
-        results.append(href)
+        # Parse lastmod date
+        lastmod = None
+        lm_elem = url_elem.find("sm:lastmod", ns)
+        if lm_elem is None:
+            lm_elem = url_elem.find("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod")
+        if lm_elem is None:
+            lm_elem = url_elem.find("lastmod")
+        if lm_elem is not None and lm_elem.text:
+            try:
+                lastmod = datetime.fromisoformat(lm_elem.text.strip().replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                pass
+
+        results.append((href, lastmod))
+
+    # Sort by lastmod descending (newest first), None values at the end
+    results.sort(key=lambda x: (x[1] is None, x[1] or datetime.min.replace(tzinfo=timezone.utc)), reverse=False)
+    # Actually: we want newest first, so sort by (is_None, date) with reverse
+    # None first → reverse=True puts None last; then date descending
+    results.sort(key=lambda x: (0 if x[1] is not None else 1, x[1] or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
 
     return results
 
@@ -165,13 +185,17 @@ async def fetch_sitemap_source(
     if not article_urls:
         return []
 
-    # Limit URLs to fetch (pick most recent-looking — sitemaps are usually last-modified order)
-    article_urls = article_urls[: limit * 2]  # Fetch extra in case some fail
+    # _parse_sitemap now returns (url, lastmod) tuples sorted newest first
+    article_entries = article_urls[: limit * 2]  # Fetch extra in case some fail
 
-    # Fetch pages concurrently
+    # Fetch pages concurrently (extract URLs for page fetching)
+    urls_to_fetch = [url for url, _ in article_entries]
     semaphore = asyncio.Semaphore(concurrency)
-    tasks = [_fetch_page_title(client, url, semaphore) for url in article_urls]
+    tasks = [_fetch_page_title(client, url, semaphore) for url in urls_to_fetch]
     results = await asyncio.gather(*tasks)
+
+    # Build a lookup of sitemap lastmod for fallback dates
+    lastmod_map = {url: lm for url, lm in article_entries if lm is not None}
 
     # Build NewsItems
     items = []
@@ -180,6 +204,10 @@ async def fetch_sitemap_source(
         if title == "(no title)" or title in seen_titles:
             continue
         seen_titles.add(title)
+
+        # Use sitemap lastmod as fallback if HTML date not found
+        if pub_date is None:
+            pub_date = lastmod_map.get(url)
 
         items.append(NewsItem(
             title=title,
