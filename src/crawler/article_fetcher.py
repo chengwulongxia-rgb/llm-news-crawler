@@ -190,8 +190,22 @@ async def fetch_with_httpx(url: str, timeout: int = 20) -> FetchedArticle | None
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
             resp = await client.get(url, headers={
-                "User-Agent": "Mozilla/5.0 (compatible; LLMCrawler/1.0)",
-                "Accept": "text/html,application/xhtml+xml",
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Linux"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+                "Cache-Control": "max-age=0",
             })
             resp.raise_for_status()
 
@@ -229,9 +243,11 @@ async def fetch_with_httpx(url: str, timeout: int = 20) -> FetchedArticle | None
         return None
 
 
-async def fetch_with_playwright(url: str, timeout: int = 30) -> FetchedArticle | None:
+async def fetch_with_playwright(url: str, timeout: int = 30, debug: bool = False) -> FetchedArticle | None:
     """Fetch article content using Playwright (for JS-rendered sites)."""
     if not HAS_PLAYWRIGHT:
+        if debug:
+            print(f"[playwright] Not installed", file=__import__('sys').stderr)
         return None
 
     try:
@@ -247,13 +263,60 @@ async def fetch_with_playwright(url: str, timeout: int = 30) -> FetchedArticle |
             )
             # Use default context — custom contexts can break stealth and trigger bot detection
             page = await browser.new_page()
-            await page.goto(url, wait_until="networkidle", timeout=timeout * 1000)
-            await page.wait_for_timeout(2000)
 
-            html = await page.content()
-            await browser.close()
+            # Apply comprehensive stealth patches via playwright-stealth
+            try:
+                from playwright_stealth import stealth_async
+                await stealth_async(page)
+            except ImportError:
+                pass
 
-            soup = _clean_html(html)
+            # Additional stealth scripts to hide automation fingerprints
+            await page.add_init_script("""
+                // Overwrite navigator.webdriver
+                Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                // Overwrite chrome.runtime (missing in headless = bot signal)
+                window.chrome = { runtime: {} };
+                // Overwrite permissions.query for notifications (bot signal)
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications'
+                        ? Promise.resolve({ state: Notification.permission })
+                        : originalQuery(parameters)
+                );
+                // Overwrite plugins (empty = bot signal)
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                // Overwrite languages
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en', 'zh-TW', 'zh'] });
+            """)
+
+            await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+            # Wait for JS-rendered content to settle (but don't wait for never-ending CF challenges)
+            await page.wait_for_timeout(3000)
+
+            # Check for Cloudflare challenge page
+            page_title = await page.title()
+            content = await page.content()
+            cloudflare_signals = [
+                "cf-browser-verification",
+                "checking your browser",
+                "this page couldn",
+                "please enable javascript",
+                "attention required",
+                "cloudflare",
+            ]
+            is_blocked = (
+                len(content) < 5000
+                or any(signal in content.lower() for signal in cloudflare_signals)
+                or any(signal in page_title.lower() for signal in cloudflare_signals)
+            )
+            if is_blocked:
+                if debug:
+                    print(f"[playwright] Likely blocked by Cloudflare (title='{page_title}', html={len(content)} bytes)", file=__import__('sys').stderr)
+                await browser.close()
+                return None
+
+            soup = _clean_html(content)
             title = _extract_title(soup)
             meta = _extract_meta(soup)
             body_el = _find_body_element(soup)
@@ -262,12 +325,20 @@ async def fetch_with_playwright(url: str, timeout: int = 30) -> FetchedArticle |
                 body_el = soup.find("body")
 
             if body_el is None:
+                if debug:
+                    print(f"[playwright] No body element found", file=__import__('sys').stderr)
+                await browser.close()
                 return None
 
             body_text = _body_to_text(body_el)
 
             if len(body_text) < 100:
+                if debug:
+                    print(f"[playwright] Body too short: {len(body_text)} chars", file=__import__('sys').stderr)
+                await browser.close()
                 return None
+
+            await browser.close()
 
             return FetchedArticle(
                 url=url,
@@ -279,7 +350,9 @@ async def fetch_with_playwright(url: str, timeout: int = 30) -> FetchedArticle |
                 method="playwright",
             )
 
-    except Exception:
+    except Exception as e:
+        if debug:
+            print(f"[playwright] Exception: {type(e).__name__}: {e}", file=__import__('sys').stderr)
         return None
 
 
@@ -287,6 +360,7 @@ async def fetch_article(
     url: str,
     force_playwright: bool = False,
     timeout: int = 30,
+    debug: bool = False,
 ) -> FetchedArticle | None:
     """Fetch a single article from a URL.
 
@@ -296,6 +370,7 @@ async def fetch_article(
         url: Article URL to fetch.
         force_playwright: Skip httpx and use Playwright directly.
         timeout: Request timeout in seconds.
+        debug: Print failure reasons to stderr.
 
     Returns:
         FetchedArticle or None if extraction failed.
@@ -305,9 +380,11 @@ async def fetch_article(
         result = await fetch_with_httpx(url, timeout)
         if result and len(result.body) > 200:
             return result
+        if debug:
+            print(f"[fetch] httpx failed, falling back to playwright", file=__import__('sys').stderr)
 
     # Fallback to Playwright
     if HAS_PLAYWRIGHT:
-        return await fetch_with_playwright(url, timeout)
+        return await fetch_with_playwright(url, timeout, debug=debug)
 
     return None

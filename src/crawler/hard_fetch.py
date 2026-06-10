@@ -253,14 +253,14 @@ def _parse_hn_html(html: str, item_id: str, url: str) -> HardFetchedContent | No
 
 # ── Generic fetcher (delegates to article_fetcher) ─────────────────
 
-async def fetch_generic(url: str, timeout: int = 20) -> HardFetchedContent | None:
+async def fetch_generic(url: str, timeout: int = 20, debug: bool = False) -> HardFetchedContent | None:
     """Fetch any URL using the standard article_fetcher pipeline.
 
     Tries httpx first, falls back to Playwright for JS-rendered pages.
     """
     from crawler.article_fetcher import fetch_article as _fetch_article
 
-    result = await _fetch_article(url, timeout=timeout)
+    result = await _fetch_article(url, timeout=timeout, debug=debug)
     if result is None:
         return None
 
@@ -293,7 +293,7 @@ def classify_url(url: str) -> str:
     return "generic"
 
 
-async def fetch_any(url: str, timeout: int = 20) -> HardFetchedContent | None:
+async def fetch_any(url: str, timeout: int = 20, debug: bool = False) -> HardFetchedContent | None:
     """Smart fetch: auto-detect site type and use best fetcher.
 
     Usage:
@@ -307,7 +307,7 @@ async def fetch_any(url: str, timeout: int = 20) -> HardFetchedContent | None:
     elif site_type == "hackernews":
         return await fetch_hackernews_thread(url, timeout=timeout)
     else:
-        return await fetch_generic(url, timeout)
+        return await fetch_generic(url, timeout, debug=debug)
 
 
 async def fetch_batch(urls: list[str], timeout: int = 20) -> list[HardFetchedContent | None]:

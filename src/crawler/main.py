@@ -153,6 +153,10 @@ def main():
         "--fetch-batch", type=str, default=None, metavar="FILE",
         help="批次擷取：從檔案讀取 URL 清單（每行一個），平行擷取所有文章",
     )
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="顯示 fetch 失敗的詳細原因（stderr）",
+    )
 
     args = parser.parse_args()
 
@@ -176,6 +180,7 @@ def main():
         article = asyncio.run(fetch_article(
             args.fetch,
             force_playwright=args.force_playwright,
+            debug=args.debug,
         ))
         if article is None:
             print(f"❌ 無法擷取文章：{args.fetch}", file=sys.stderr)
@@ -189,7 +194,7 @@ def main():
     # ── Smart fetch mode (auto-detect site type) ──
     if args.fetch_smart:
         from crawler.hard_fetch import fetch_any
-        content = asyncio.run(fetch_any(args.fetch_smart))
+        content = asyncio.run(fetch_any(args.fetch_smart, debug=args.debug))
         if content is None:
             print(f"❌ 無法擷取文章：{args.fetch_smart}", file=sys.stderr)
             sys.exit(1)
