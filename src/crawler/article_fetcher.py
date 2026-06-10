@@ -19,6 +19,13 @@ try:
 except ImportError:
     HAS_PLAYWRIGHT = False
 
+# curl_cffi for TLS fingerprint impersonation (bypasses Cloudflare)
+try:
+    from curl_cffi import requests as curl_cffi_requests
+    HAS_CURL_CFFI = True
+except ImportError:
+    HAS_CURL_CFFI = False
+
 
 @dataclass
 class FetchedArticle:
@@ -183,6 +190,76 @@ def _body_to_text(body_el: BeautifulSoup) -> str:
         paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
 
     return "\n\n".join(paragraphs)
+
+
+# ── Cloudflare-penetrating fetch (curl_cffi with TLS impersonation) ──
+
+async def fetch_with_curl_cffi(url: str, timeout: int = 30, impersonate: str = "chrome131") -> FetchedArticle | None:
+    """Fetch using curl_cffi with real browser TLS fingerprint impersonation.
+
+    This is the ONLY method that reliably bypasses Cloudflare JS Challenge
+    on sites like anthropic.com and openai.com. It mimics Chrome's TLS
+    handshake exactly, which Cloudflare cannot distinguish from a real browser.
+    """
+    if not HAS_CURL_CFFI:
+        return None
+
+    try:
+        # curl_cffi is synchronous, so we run it via asyncio.to_thread
+        import asyncio as _asyncio
+
+        def _sync_fetch():
+            resp = curl_cffi_requests.get(
+                url,
+                impersonate=impersonate,
+                timeout=timeout,
+                headers={
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9,zh-TW;q=0.8",
+                },
+            )
+            return resp
+
+        resp = await _asyncio.to_thread(_sync_fetch)
+
+        if resp.status_code >= 400:
+            return None
+
+        html = resp.text
+        if not html or len(html) < 500:
+            return None
+
+        # Check for Cloudflare challenge page (shouldn't happen with impersonation)
+        if "cf-browser-verification" in html.lower() or "checking your browser" in html.lower():
+            return None
+
+        soup = _clean_html(html)
+        title = _extract_title(soup)
+        meta = _extract_meta(soup)
+        body_el = _find_body_element(soup)
+
+        if body_el is None:
+            body_el = soup.find("body")
+            if body_el is None:
+                return None
+
+        body_text = _body_to_text(body_el)
+
+        if len(body_text) < 100:
+            return None
+
+        return FetchedArticle(
+            url=url,
+            title=title,
+            author=meta["author"],
+            date=meta["date"],
+            body=body_text,
+            site_name=meta["site_name"],
+            method="curl_cffi",
+        )
+
+    except Exception:
+        return None
 
 
 async def fetch_with_httpx(url: str, timeout: int = 20) -> FetchedArticle | None:
@@ -376,7 +453,15 @@ async def fetch_article(
         FetchedArticle or None if extraction failed.
     """
     if not force_playwright:
-        # Try httpx first
+        # Try curl_cffi first (TLS impersonation — penetrates Cloudflare)
+        if HAS_CURL_CFFI:
+            result = await fetch_with_curl_cffi(url, timeout)
+            if result and len(result.body) > 200:
+                return result
+            if debug:
+                print(f"[fetch] curl_cffi failed, falling back to httpx", file=__import__('sys').stderr)
+
+        # Try httpx with browser headers
         result = await fetch_with_httpx(url, timeout)
         if result and len(result.body) > 200:
             return result
