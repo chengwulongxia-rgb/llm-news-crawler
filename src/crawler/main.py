@@ -75,8 +75,20 @@ async def run(
             unique_items.append(item)
 
     # Cross-run deduplication
+    # HN high-score items (>100 points) bypass dedup — a hot HN story
+    # should not be hidden just because a lower-signal source saw the URL first.
     if dedup_store is not None:
-        unique_items = [item for item in unique_items if not dedup_store.is_seen(item.url)]
+        kept = []
+        for item in unique_items:
+            if dedup_store.is_seen(item.url):
+                # Allow through if it's a high-signal HN story
+                if item.source == "HackerNews" and item.score > 100:
+                    dedup_store.mark_seen(item.url)  # refresh TTL
+                    kept.append(item)
+                # else: silently dropped (normal dedup)
+            else:
+                kept.append(item)
+        unique_items = kept
 
     # Sort by score descending
     unique_items.sort(key=lambda x: x.score, reverse=True)

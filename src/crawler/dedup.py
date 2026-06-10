@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 DEFAULT_DEDUP_FILE = Path.home() / ".hermes" / "crawler_seen_urls.json"
-DEFAULT_TTL_HOURS = 48  # URLs expire after 48 hours
+DEFAULT_TTL_HOURS = 18  # URLs expire after 18 hours
 
 
 class DedupStore:
