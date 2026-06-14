@@ -2,12 +2,22 @@
 
 Uses httpx for simple sites, Playwright for JS-rendered pages.
 Extracts title, body text, and metadata.
+
+Error Classification:
+    When a fetch fails, call get_last_fetch_error() for:
+      - PAYWALL    — hard paywall / login wall (WSJ, FT, Bloomberg)
+      - CF_BLOCK   — Cloudflare / bot detection block
+      - TIMEOUT    — request timed out
+      - HTTP_ERROR — non-2xx status code
+      - EMPTY      — page fetched but no usable content
+      - UNKNOWN    — unexpected exception
 """
 
 import asyncio
 import json
 import re
 from dataclasses import dataclass, field
+from enum import Enum, auto
 
 import httpx
 from bs4 import BeautifulSoup
@@ -25,6 +35,61 @@ try:
     HAS_CURL_CFFI = True
 except ImportError:
     HAS_CURL_CFFI = False
+
+
+# ── Error classification ────────────────────────────────────────
+
+class FetchError(Enum):
+    """Classification of why a fetch failed."""
+    PAYWALL = auto()      # Hard paywall / login wall
+    CF_BLOCK = auto()     # Cloudflare or bot detection
+    TIMEOUT = auto()      # Request timed out
+    HTTP_ERROR = auto()   # Non-2xx HTTP status
+    EMPTY = auto()        # Page fetched but no usable content
+    UNKNOWN = auto()      # Unexpected error
+
+
+_last_fetch_error: FetchError | None = None
+_last_fetch_detail: str = ""
+
+
+def get_last_fetch_error() -> tuple[FetchError | None, str]:
+    """Return (error_type, detail_message) for the last failed fetch.
+    
+    Returns (None, "") if the last fetch succeeded.
+    """
+    return _last_fetch_error, _last_fetch_detail
+
+
+def _set_fetch_error(err: FetchError, detail: str = ""):
+    """Set the module-level fetch error state.
+
+    PAYWALL is sticky — once detected, it won't be overwritten
+    by less informative errors from subsequent fetch attempts.
+    """
+    global _last_fetch_error, _last_fetch_detail
+    # Don't overwrite PAYWALL with less specific errors
+    if _last_fetch_error == FetchError.PAYWALL and err != FetchError.PAYWALL:
+        return
+    _last_fetch_error = err
+    _last_fetch_detail = detail
+
+
+def _clear_fetch_error():
+    """Clear the module-level fetch error state (call on success)."""
+    global _last_fetch_error, _last_fetch_detail
+    _last_fetch_error = None
+    _last_fetch_detail = ""
+
+
+# ── TLS fingerprint impersonation targets (tried in order) ─────
+
+IMPERSONATE_TARGETS = [
+    "chrome131",    # Latest Chrome
+    "chrome124",    # Slightly older Chrome
+    "safari18_0",   # Safari 18
+    "firefox133",   # Firefox 133
+]
 
 
 @dataclass
@@ -89,6 +154,9 @@ BODY_SELECTORS = [
     ".blog-post",
     ".markdown-body",
     ".prose",
+    ".post-body",
+    ".article-body",
+    '[itemprop="articleBody"]',
 ]
 
 
@@ -192,20 +260,49 @@ def _body_to_text(body_el: BeautifulSoup) -> str:
     return "\n\n".join(paragraphs)
 
 
+# ── Paywall detection ────────────────────────────────────────────
+
+# Signals that a page is behind a paywall or login wall
+PAYWALL_SIGNALS = [
+    "subscription required",
+    "subscribe to continue",
+    "please log in to continue",
+    "sign in to read",
+    "create an account to read",
+    "you've reached your limit",
+    "premium content",
+    "this is a subscriber-only",
+    "unlock this article",
+    "already a subscriber?",
+    "you need a subscription",
+    "register to read",
+    "paywall",
+]
+
+
+def _detect_paywall(html: str, status_code: int) -> bool:
+    """Check if a page is behind a hard paywall."""
+    if status_code == 403:
+        return True
+    if status_code == 401:
+        return True
+    html_lower = html.lower()
+    if len(html) < 3000:
+        # Very short page — could be paywall stub
+        for signal in PAYWALL_SIGNALS:
+            if signal in html_lower:
+                return True
+    return any(signal in html_lower for signal in PAYWALL_SIGNALS)
+
+
 # ── Cloudflare-penetrating fetch (curl_cffi with TLS impersonation) ──
 
-async def fetch_with_curl_cffi(url: str, timeout: int = 30, impersonate: str = "chrome131") -> FetchedArticle | None:
-    """Fetch using curl_cffi with real browser TLS fingerprint impersonation.
-
-    This is the ONLY method that reliably bypasses Cloudflare JS Challenge
-    on sites like anthropic.com and openai.com. It mimics Chrome's TLS
-    handshake exactly, which Cloudflare cannot distinguish from a real browser.
+async def _try_curl_cffi_single(url: str, impersonate: str, timeout: int) -> tuple[str | None, int]:
+    """Try a single curl_cffi request with a specific impersonation target.
+    
+    Returns (html, status_code) or (None, 0) on failure.
     """
-    if not HAS_CURL_CFFI:
-        return None
-
     try:
-        # curl_cffi is synchronous, so we run it via asyncio.to_thread
         import asyncio as _asyncio
 
         def _sync_fetch():
@@ -221,45 +318,96 @@ async def fetch_with_curl_cffi(url: str, timeout: int = 30, impersonate: str = "
             return resp
 
         resp = await _asyncio.to_thread(_sync_fetch)
+        return resp.text, resp.status_code
+    except Exception:
+        return None, 0
 
-        if resp.status_code >= 400:
-            return None
 
-        html = resp.text
-        if not html or len(html) < 500:
-            return None
+async def fetch_with_curl_cffi(url: str, timeout: int = 30) -> FetchedArticle | None:
+    """Fetch using curl_cffi with real browser TLS fingerprint impersonation.
 
-        # Check for Cloudflare challenge page (shouldn't happen with impersonation)
-        if "cf-browser-verification" in html.lower() or "checking your browser" in html.lower():
-            return None
+    This is the ONLY method that reliably bypasses Cloudflare JS Challenge
+    on sites like anthropic.com and openai.com. It mimics Chrome's TLS
+    handshake exactly, which Cloudflare cannot distinguish from a real browser.
+    
+    Tries multiple impersonation targets in order (chrome131 → chrome124 → safari → firefox).
+    """
+    if not HAS_CURL_CFFI:
+        return None
 
-        soup = _clean_html(html)
-        title = _extract_title(soup)
-        meta = _extract_meta(soup)
-        body_el = _find_body_element(soup)
+    for target in IMPERSONATE_TARGETS:
+        try:
+            html, status_code = await _try_curl_cffi_single(url, target, timeout)
 
-        if body_el is None:
-            body_el = soup.find("body")
-            if body_el is None:
+            if html is None:
+                continue
+
+            if status_code >= 500:
+                # Server error — try next target
+                continue
+
+            if status_code >= 400:
+                # Check for paywall
+                if _detect_paywall(html, status_code):
+                    _set_fetch_error(FetchError.PAYWALL, f"HTTP {status_code}, paywall detected")
+                    return None
+                if status_code == 403:
+                    _set_fetch_error(FetchError.HTTP_ERROR, f"HTTP 403 for {target}")
+                else:
+                    continue
+
+            if not html or len(html) < 500:
+                continue
+
+            # Check for Cloudflare challenge page
+            if "cf-browser-verification" in html.lower() or "checking your browser" in html.lower():
+                _set_fetch_error(FetchError.CF_BLOCK, f"Cloudflare block with {target}")
+                continue  # Try next target
+
+            # Check for paywall in content
+            if _detect_paywall(html, status_code):
+                _set_fetch_error(FetchError.PAYWALL, "Paywall detected in page content")
                 return None
 
-        body_text = _body_to_text(body_el)
+            soup = _clean_html(html)
+            title = _extract_title(soup)
+            meta = _extract_meta(soup)
+            body_el = _find_body_element(soup)
 
-        if len(body_text) < 100:
-            return None
+            if body_el is None:
+                body_el = soup.find("body")
+                if body_el is None:
+                    _set_fetch_error(FetchError.EMPTY, "No body element found")
+                    return None
 
-        return FetchedArticle(
-            url=url,
-            title=title,
-            author=meta["author"],
-            date=meta["date"],
-            body=body_text,
-            site_name=meta["site_name"],
-            method="curl_cffi",
-        )
+            body_text = _body_to_text(body_el)
 
-    except Exception:
-        return None
+            if len(body_text) < 100:
+                _set_fetch_error(FetchError.EMPTY, f"Body too short: {len(body_text)} chars")
+                return None
+
+            _clear_fetch_error()
+            return FetchedArticle(
+                url=url,
+                title=title,
+                author=meta["author"],
+                date=meta["date"],
+                body=body_text,
+                site_name=meta["site_name"],
+                method=f"curl_cffi/{target}",
+            )
+
+        except Exception as e:
+            if "timeout" in str(e).lower() or "timed out" in str(e).lower():
+                _set_fetch_error(FetchError.TIMEOUT, str(e))
+                continue
+            # Other exceptions — try next target
+            continue
+
+    # All targets exhausted
+    if _last_fetch_error is None:
+        _set_fetch_error(FetchError.UNKNOWN, "All impersonation targets exhausted")
+    return None
 
 
 async def fetch_with_httpx(url: str, timeout: int = 20) -> FetchedArticle | None:
@@ -288,6 +436,12 @@ async def fetch_with_httpx(url: str, timeout: int = 20) -> FetchedArticle | None
 
             html = resp.text
             if not html or len(html) < 100:
+                _set_fetch_error(FetchError.EMPTY, f"HTML too short: {len(html) if html else 0} chars")
+                return None
+
+            # Check for paywall
+            if _detect_paywall(html, resp.status_code):
+                _set_fetch_error(FetchError.PAYWALL, "Paywall detected")
                 return None
 
             soup = _clean_html(html)
@@ -299,13 +453,16 @@ async def fetch_with_httpx(url: str, timeout: int = 20) -> FetchedArticle | None
                 # Fallback: try the whole body minus nav/footer
                 body_el = soup.find("body")
                 if body_el is None:
+                    _set_fetch_error(FetchError.EMPTY, "No body element found")
                     return None
 
             body_text = _body_to_text(body_el)
 
             if len(body_text) < 100:
+                _set_fetch_error(FetchError.EMPTY, f"Body too short: {len(body_text)} chars")
                 return None
 
+            _clear_fetch_error()
             return FetchedArticle(
                 url=url,
                 title=title,
@@ -316,7 +473,20 @@ async def fetch_with_httpx(url: str, timeout: int = 20) -> FetchedArticle | None
                 method="httpx",
             )
 
-    except Exception:
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code
+        if status == 403:
+            _set_fetch_error(FetchError.CF_BLOCK, f"HTTP 403")
+        elif status == 401:
+            _set_fetch_error(FetchError.PAYWALL, f"HTTP 401")
+        else:
+            _set_fetch_error(FetchError.HTTP_ERROR, f"HTTP {status}")
+        return None
+    except httpx.TimeoutException:
+        _set_fetch_error(FetchError.TIMEOUT, "httpx timeout")
+        return None
+    except Exception as e:
+        _set_fetch_error(FetchError.UNKNOWN, f"{type(e).__name__}: {e}")
         return None
 
 
@@ -390,6 +560,13 @@ async def fetch_with_playwright(url: str, timeout: int = 30, debug: bool = False
             if is_blocked:
                 if debug:
                     print(f"[playwright] Likely blocked by Cloudflare (title='{page_title}', html={len(content)} bytes)", file=__import__('sys').stderr)
+                _set_fetch_error(FetchError.CF_BLOCK, f"Cloudflare block (title='{page_title}')")
+                await browser.close()
+                return None
+
+            # Check for paywall in rendered content
+            if _detect_paywall(content, 200):
+                _set_fetch_error(FetchError.PAYWALL, "Paywall detected in rendered page")
                 await browser.close()
                 return None
 
@@ -404,6 +581,7 @@ async def fetch_with_playwright(url: str, timeout: int = 30, debug: bool = False
             if body_el is None:
                 if debug:
                     print(f"[playwright] No body element found", file=__import__('sys').stderr)
+                _set_fetch_error(FetchError.EMPTY, "No body element found")
                 await browser.close()
                 return None
 
@@ -412,11 +590,13 @@ async def fetch_with_playwright(url: str, timeout: int = 30, debug: bool = False
             if len(body_text) < 100:
                 if debug:
                     print(f"[playwright] Body too short: {len(body_text)} chars", file=__import__('sys').stderr)
+                _set_fetch_error(FetchError.EMPTY, f"Body too short: {len(body_text)} chars")
                 await browser.close()
                 return None
 
             await browser.close()
 
+            _clear_fetch_error()
             return FetchedArticle(
                 url=url,
                 title=title,
@@ -428,6 +608,13 @@ async def fetch_with_playwright(url: str, timeout: int = 30, debug: bool = False
             )
 
     except Exception as e:
+        error_str = str(e).lower()
+        if "timeout" in error_str or "timed out" in error_str:
+            _set_fetch_error(FetchError.TIMEOUT, str(e))
+        elif "net::err" in error_str:
+            _set_fetch_error(FetchError.HTTP_ERROR, str(e))
+        else:
+            _set_fetch_error(FetchError.UNKNOWN, f"{type(e).__name__}: {e}")
         if debug:
             print(f"[playwright] Exception: {type(e).__name__}: {e}", file=__import__('sys').stderr)
         return None
@@ -441,7 +628,8 @@ async def fetch_article(
 ) -> FetchedArticle | None:
     """Fetch a single article from a URL.
 
-    Tries httpx first (fast), falls back to Playwright (JS-rendered).
+    Tries curl_cffi first (with multi-target TLS impersonation),
+    then httpx, then Playwright.
 
     Args:
         url: Article URL to fetch.
@@ -451,6 +639,7 @@ async def fetch_article(
 
     Returns:
         FetchedArticle or None if extraction failed.
+        Check get_last_fetch_error() for failure reason.
     """
     if not force_playwright:
         # Try curl_cffi first (TLS impersonation — penetrates Cloudflare)
@@ -459,14 +648,16 @@ async def fetch_article(
             if result and len(result.body) > 200:
                 return result
             if debug:
-                print(f"[fetch] curl_cffi failed, falling back to httpx", file=__import__('sys').stderr)
+                err, detail = get_last_fetch_error()
+                print(f"[fetch] curl_cffi failed ({err.name if err else 'unknown'}: {detail}), falling back to httpx", file=__import__('sys').stderr)
 
         # Try httpx with browser headers
         result = await fetch_with_httpx(url, timeout)
         if result and len(result.body) > 200:
             return result
         if debug:
-            print(f"[fetch] httpx failed, falling back to playwright", file=__import__('sys').stderr)
+            err, detail = get_last_fetch_error()
+            print(f"[fetch] httpx failed ({err.name if err else 'unknown'}: {detail}), falling back to playwright", file=__import__('sys').stderr)
 
     # Fallback to Playwright
     if HAS_PLAYWRIGHT:

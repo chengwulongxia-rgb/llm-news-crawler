@@ -5,9 +5,10 @@ These go beyond generic article_fetcher by targeting
 specific HTML structures on common LLM news sources.
 
 Supported fetchers:
-- fetch_arxiv_abstract(url)    → extract paper abstract + metadata
-- fetch_hackernews_thread(url) → extract OP + top comments
-- fetch_generic(url)           → generic article content
+- fetch_arxiv_abstract(url)      → extract paper abstract + metadata
+- fetch_hackernews_thread(url)   → extract OP + top comments
+- fetch_youtube_transcript(url)  → extract video transcript
+- fetch_generic(url)             → generic article content
 """
 
 import asyncio
@@ -251,12 +252,163 @@ def _parse_hn_html(html: str, item_id: str, url: str) -> HardFetchedContent | No
     )
 
 
+# ── YouTube transcript fetcher ────────────────────────────────────
+
+# YouTube URL patterns
+YOUTUBE_PATTERNS = [
+    re.compile(r"(?:https?://)?(?:www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})"),
+    re.compile(r"(?:https?://)?(?:www\.)?youtube\.com/shorts/([a-zA-Z0-9_-]{11})"),
+    re.compile(r"(?:https?://)?(?:www\.)?youtube\.com/embed/([a-zA-Z0-9_-]{11})"),
+    re.compile(r"(?:https?://)?(?:www\.)?youtube\.com/live/([a-zA-Z0-9_-]{11})"),
+    re.compile(r"(?:https?://)?youtu\.be/([a-zA-Z0-9_-]{11})"),
+    re.compile(r"^([a-zA-Z0-9_-]{11})$"),
+]
+
+# youtube-transcript-api is optional
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi
+    HAS_YOUTUBE_API = True
+except ImportError:
+    HAS_YOUTUBE_API = False
+
+
+def _extract_youtube_id(url: str) -> str | None:
+    """Extract 11-char YouTube video ID from any URL format."""
+    url = url.strip()
+    for pattern in YOUTUBE_PATTERNS:
+        match = pattern.search(url)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _is_youtube_url(url: str) -> bool:
+    """Check if a URL points to YouTube."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if "youtube.com" in host or "youtu.be" in host:
+        return True
+    # Also check for raw video IDs (11 chars)
+    if _extract_youtube_id(url):
+        return True
+    return False
+
+
+def _format_timestamp(seconds: float) -> str:
+    """Convert seconds to HH:MM:SS or MM:SS format."""
+    total = int(seconds)
+    h, remainder = divmod(total, 3600)
+    m, s = divmod(remainder, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+async def fetch_youtube_transcript(
+    url: str,
+    language: str | None = None,
+    timeout: int = 30,
+) -> HardFetchedContent | None:
+    """Fetch a YouTube video transcript.
+
+    Extracts the full transcript text with optional timestamps.
+    Uses youtube-transcript-api (no API key required).
+
+    Args:
+        url: YouTube URL or video ID.
+        language: Comma-separated language preference (e.g. 'en,zh').
+        timeout: Request timeout in seconds.
+
+    Returns:
+        HardFetchedContent with video metadata and transcript,
+        or None if transcript is unavailable.
+    """
+    if not HAS_YOUTUBE_API:
+        return None
+
+    video_id = _extract_youtube_id(url)
+    if not video_id:
+        return None
+
+    try:
+        # Fetch video metadata from oEmbed API
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+            oembed_resp = await client.get(oembed_url)
+            video_title = ""
+            author_name = ""
+            if oembed_resp.status_code == 200:
+                oembed_data = oembed_resp.json()
+                video_title = oembed_data.get("title", "")
+                author_name = oembed_data.get("author_name", "")
+
+        # Fetch transcript using youtube-transcript-api
+        yt_api: YouTubeTranscriptApi = YouTubeTranscriptApi()  # type: ignore[name-defined]
+        languages = [l.strip() for l in language.split(",")] if language else None
+
+        import asyncio as _asyncio
+        def _sync_fetch():
+            return yt_api.fetch(video_id, languages=languages) if languages else yt_api.fetch(video_id)
+
+        segments = await _asyncio.to_thread(_sync_fetch)
+
+        if not segments:
+            return None
+
+        # Normalize segments to dicts (v1.x returns objects)
+        normalized = []
+        for seg in segments:
+            if hasattr(seg, 'text'):
+                normalized.append({"text": seg.text, "start": seg.start, "duration": seg.duration})
+            else:
+                normalized.append(seg)
+
+        # Build full text and timestamped version
+        full_text = " ".join(seg["text"] for seg in normalized)
+        timestamped_lines = []
+        for seg in normalized:
+            ts = _format_timestamp(seg["start"])
+            timestamped_lines.append(f"{ts} {seg['text']}")
+
+        # Get total duration
+        if normalized:
+            last = normalized[-1]
+            total_duration = _format_timestamp(last["start"] + last["duration"])
+        else:
+            total_duration = "unknown"
+
+        body_parts = [
+            f"**影片長度：** {total_duration}",
+            f"**片段數：** {len(normalized)}",
+            "",
+            "## 逐字稿",
+            "",
+            "\n".join(timestamped_lines),
+        ]
+
+        return HardFetchedContent(
+            url=url,
+            title=video_title or f"YouTube: {video_id}",
+            body="\n".join(body_parts),
+            meta={
+                "author": author_name,
+                "site_name": "YouTube",
+                "video_id": video_id,
+                "duration": total_duration,
+                "segment_count": len(normalized),
+            },
+        )
+
+    except Exception:
+        return None
+
+
 # ── Generic fetcher (delegates to article_fetcher) ─────────────────
 
 async def fetch_generic(url: str, timeout: int = 20, debug: bool = False) -> HardFetchedContent | None:
     """Fetch any URL using the standard article_fetcher pipeline.
 
-    Tries httpx first, falls back to Playwright for JS-rendered pages.
+    Tries curl_cffi first, then httpx, then Playwright for JS-rendered pages.
     """
     from crawler.article_fetcher import fetch_article as _fetch_article
 
@@ -281,7 +433,7 @@ async def fetch_generic(url: str, timeout: int = 20, debug: bool = False) -> Har
 def classify_url(url: str) -> str:
     """Classify a URL to choose the best fetcher.
 
-    Returns: "arxiv" | "hackernews" | "generic"
+    Returns: "arxiv" | "hackernews" | "youtube" | "generic"
     """
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
@@ -290,6 +442,11 @@ def classify_url(url: str) -> str:
         return "arxiv"
     if "ycombinator.com" in host or "hackernews" in host:
         return "hackernews"
+    if "youtube.com" in host or "youtu.be" in host:
+        return "youtube"
+    # Also check raw video IDs
+    if _extract_youtube_id(url) and not host:
+        return "youtube"
     return "generic"
 
 
@@ -306,6 +463,8 @@ async def fetch_any(url: str, timeout: int = 20, debug: bool = False) -> HardFet
         return await fetch_arxiv_abstract(url, timeout)
     elif site_type == "hackernews":
         return await fetch_hackernews_thread(url, timeout=timeout)
+    elif site_type == "youtube":
+        return await fetch_youtube_transcript(url)
     else:
         return await fetch_generic(url, timeout, debug=debug)
 

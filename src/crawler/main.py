@@ -8,6 +8,8 @@ Usage:
     uv run llm-crawler --no-dedup          # 停用跨輪次去重
     uv run llm-crawler --clear-dedup       # 清除去重記錄
     uv run llm-crawler -o /tmp/news.txt    # 輸出到檔案
+    uv run llm-crawler --fetch URL         # 擷取文章內文
+    uv run llm-crawler --fetch-fallback URL  # 擷取失敗時搜尋替代來源
 """
 
 import argparse
@@ -25,7 +27,40 @@ from crawler.sources.playwright_blogs import fetch_all_playwright
 from crawler.filters import filter_items
 from crawler.models import NewsItem
 from crawler.dedup import DedupStore
-from crawler.article_fetcher import fetch_article
+from crawler.article_fetcher import fetch_article, get_last_fetch_error, FetchError
+
+
+# ── Error code mapping for user-friendly messages ──────────────────
+
+ERROR_MESSAGES = {
+    FetchError.PAYWALL:    "付費牆（需要訂閱或登入）",
+    FetchError.CF_BLOCK:   "Cloudflare / 機器人防護阻擋",
+    FetchError.TIMEOUT:    "請求逾時",
+    FetchError.HTTP_ERROR: "HTTP 錯誤",
+    FetchError.EMPTY:      "無法擷取內文（頁面可能為空或非文章格式）",
+    FetchError.UNKNOWN:    "未知錯誤",
+}
+
+ERROR_RECOVERY_HINTS = {
+    FetchError.PAYWALL:    "🔍 建議用 --fetch-fallback 自動搜尋替代報導",
+    FetchError.CF_BLOCK:   "💡 可嘗試用 --playwright 繞過 JS 挑戰",
+    FetchError.TIMEOUT:    "💡 可增加 timeout 或檢查網路連線",
+    FetchError.HTTP_ERROR: "💡 檢查 URL 是否正確、網站是否存活",
+    FetchError.EMPTY:      "💡 頁面可能需要 JavaScript 渲染，試 --playwright",
+    FetchError.UNKNOWN:    "💡 用 --debug 查看詳細錯誤",
+}
+
+
+def format_error_output(err: FetchError, detail: str, url: str) -> str:
+    """Format a user-friendly error message for fetch failures."""
+    msg = ERROR_MESSAGES.get(err, "未知原因")
+    hint = ERROR_RECOVERY_HINTS.get(err, "")
+    parts = [f"❌ 無法擷取文章：{url}", f"   原因：{msg}"]
+    if detail:
+        parts.append(f"   細節：{detail}")
+    if hint:
+        parts.append(f"   {hint}")
+    return "\n".join(parts)
 
 
 def format_collector_output(items: list[NewsItem], date_str: str) -> str:
@@ -100,6 +135,84 @@ async def run(
     return unique_items
 
 
+def _build_fallback_search_query(url: str, article_title: str = "") -> str:
+    """Build a web search query to find alternative coverage of a story.
+
+    Extracts keywords from URL path segments, prioritizing
+    longer/more meaningful words.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    path = parsed.path.strip("/")
+
+    # Split path into segments and extract words
+    all_words = []
+    for segment in path.split("/"):
+        # Replace hyphens, underscores with spaces
+        cleaned = segment.replace("-", " ").replace("_", " ")
+        for word in cleaned.split():
+            if len(word) > 2 and word.lower() not in ("the", "and", "for", "with", "are", "was", "has", "its",
+                                                       "www", "com", "org", "net", "htm", "html", "php", "asp",
+                                                       "this", "that", "from", "his", "her", "our", "you", "not",
+                                                       "can", "all"):
+                all_words.append(word)
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique_words = []
+    for w in all_words:
+        if w.lower() not in seen:
+            seen.add(w.lower())
+            unique_words.append(w)
+
+    # Use up to 8 keywords
+    query = " ".join(unique_words[:8])
+    if not query:
+        query = parsed.hostname.replace("www.", "").replace(".com", "") if parsed.hostname else ""
+    return query
+
+
+async def _fetch_with_fallback(url: str, debug: bool = False) -> str | None:
+    """Attempt to fetch an article; if it fails with PAYWALL,
+    return a structured fallback note with suggested search queries
+    for the caller to find alternative coverage.
+
+    Returns markdown content or None if completely failed.
+    """
+    from crawler.article_fetcher import fetch_article as _fa, get_last_fetch_error as _gle, FetchError as _FE
+    result = await _fa(url, debug=debug)
+
+    if result is not None:
+        return result.to_markdown()
+
+    err, detail = _gle()
+    if err != _FE.PAYWALL:
+        # Not a paywall — let caller handle
+        return None
+
+    # Paywall detected — build fallback note with search suggestions
+    query = _build_fallback_search_query(url)
+    if debug:
+        print(f"[fallback] Paywall detected for {url}", file=sys.stderr)
+        print(f"[fallback] Suggested search: {query}", file=sys.stderr)
+
+    fallback_note = f"""# (付費牆替代彙整)
+
+> ⚠️ 原文位於付費牆後，無法直接擷取。
+> 原文網址：{url}
+> 
+> 建議搜尋關鍵詞：**{query}**
+>
+> 請使用 web_search 工具搜尋同一事件的不同來源報導，聚合多篇替代文章。
+
+---
+
+*此為自動產生的付費牆提示。請以搜尋結果中的替代來源為準。*
+"""
+    return fallback_note
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="龍蝦城武 LLM 新聞爬蟲",
@@ -147,7 +260,11 @@ def main():
     )
     parser.add_argument(
         "--fetch-smart", type=str, default=None, metavar="URL",
-        help="智慧擷取：自動辨識 arXiv/HN/一般網站，用最佳方式擷取內文",
+        help="智慧擷取：自動辨識 arXiv/HN/YouTube/一般網站，用最佳方式擷取內文",
+    )
+    parser.add_argument(
+        "--fetch-fallback", type=str, default=None, metavar="URL",
+        help="擷取文章；若遇付費牆則自動搜尋替代來源彙整",
     )
     parser.add_argument(
         "--fetch-batch", type=str, default=None, metavar="FILE",
@@ -183,7 +300,11 @@ def main():
             debug=args.debug,
         ))
         if article is None:
-            print(f"❌ 無法擷取文章：{args.fetch}", file=sys.stderr)
+            err, detail = get_last_fetch_error()
+            if err:
+                print(format_error_output(err, detail, args.fetch), file=sys.stderr)
+            else:
+                print(f"❌ 無法擷取文章：{args.fetch}", file=sys.stderr)
             sys.exit(1)
         if args.json:
             print(json.dumps(article.to_dict(), ensure_ascii=False, indent=2))
@@ -199,6 +320,19 @@ def main():
             print(f"❌ 無法擷取文章：{args.fetch_smart}", file=sys.stderr)
             sys.exit(1)
         print(content.to_markdown())
+        return
+
+    # ── Fetch with fallback mode ──
+    if args.fetch_fallback:
+        content = asyncio.run(_fetch_with_fallback(args.fetch_fallback, debug=args.debug))
+        if content is None:
+            err, detail = get_last_fetch_error()
+            if err:
+                print(format_error_output(err, detail, args.fetch_fallback), file=sys.stderr)
+            else:
+                print(f"❌ 無法擷取文章（包含替代來源搜尋）：{args.fetch_fallback}", file=sys.stderr)
+            sys.exit(1)
+        print(content)
         return
 
     # ── Batch fetch mode ──

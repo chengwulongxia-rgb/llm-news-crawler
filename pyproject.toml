@@ -12,6 +12,7 @@ dependencies = [
     "playwright>=1.60.0",
     "playwright-stealth>=2.0.3",
     "pydantic>=2.10",
+    "youtube-transcript-api>=1.2.4",
 ]
 
 [project.scripts]
