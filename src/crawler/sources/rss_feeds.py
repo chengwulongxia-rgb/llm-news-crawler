@@ -1,6 +1,12 @@
-"""RSS/Atom feed crawler for company blogs and research sources.
+"""RSS/Atom feed crawler for company blogs, independent analysts, and research sources.
 
 Uses stdlib xml.etree.ElementTree — no extra deps for RSS parsing.
+
+Sources include:
+- Company blogs: OpenAI, Google AI/Research
+- Research: ArXiv CS.CL, CS.AI
+- Independent analysts: Simon Willison, Nathan Lambert (Interconnects),
+  Chip Huyen, Andrej Karpathy
 """
 
 import asyncio
@@ -70,6 +76,55 @@ RSS_SOURCES = [
         "date_tag": "pubDate",
         "date_format": "rfc2822",
         "strip_cdata": False,
+    },
+    # ── Independent Analysts ─────────────────────────────────────────
+    {
+        "name": "Simon Willison",
+        "url": "https://simonwillison.net/atom/everything/",
+        "item_tag": "entry",
+        "title_tag": "title",
+        "link_tag": "link",
+        "desc_tag": "summary",
+        "date_tag": "published",
+        "date_format": "iso",
+        "strip_cdata": False,
+        "score": 35,
+    },
+    {
+        "name": "Interconnects",
+        "url": "https://www.interconnects.ai/feed",
+        "item_tag": "item",
+        "title_tag": "title",
+        "link_tag": "link",
+        "desc_tag": "description",
+        "date_tag": "pubDate",
+        "date_format": "rfc2822",
+        "strip_cdata": True,
+        "score": 35,
+    },
+    {
+        "name": "Chip Huyen",
+        "url": "https://huyenchip.com/feed.xml",
+        "item_tag": "item",
+        "title_tag": "title",
+        "link_tag": "link",
+        "desc_tag": "description",
+        "date_tag": "pubDate",
+        "date_format": "rfc2822",
+        "strip_cdata": False,
+        "score": 30,
+    },
+    {
+        "name": "Karpathy",
+        "url": "https://karpathy.github.io/feed.xml",
+        "item_tag": "item",
+        "title_tag": "title",
+        "link_tag": "link",
+        "desc_tag": "description",
+        "date_tag": "pubDate",
+        "date_format": "rfc2822",
+        "strip_cdata": False,
+        "score": 40,
     },
 ]
 
@@ -242,7 +297,7 @@ def parse_rss_feed(xml_text: str, source_config: dict, limit: int = 20) -> list[
             title=title,
             url=url,
             source=source_name,
-            score=30,  # Official blog post, default higher score
+            score=source_config.get("score", 30),
             summary=summary,
             published_at=published_at,
         ))
