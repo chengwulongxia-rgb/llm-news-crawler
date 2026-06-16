@@ -16,7 +16,7 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -74,9 +74,47 @@ def format_collector_output(items: list[NewsItem], date_str: str) -> str:
     return "\n".join(lines)
 
 
+def filter_by_date(items: list[NewsItem], max_age_days: int = 7) -> list[NewsItem]:
+    """Filter items to only those published within max_age_days.
+
+    Items without a published_at date are kept (we can't determine age).
+    """
+    if max_age_days <= 0:
+        return items
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=max_age_days)
+
+    kept = []
+    dropped = 0
+    for item in items:
+        if item.published_at is None:
+            # No date info — keep it rather than silently drop
+            kept.append(item)
+            continue
+
+        pub = item.published_at
+        # Normalize to UTC-aware for comparison
+        if pub.tzinfo is None:
+            pub = pub.replace(tzinfo=timezone.utc)
+        else:
+            pub = pub.astimezone(timezone.utc)
+
+        if pub >= cutoff:
+            kept.append(item)
+        else:
+            dropped += 1
+
+    if dropped > 0:
+        print(f"📅 日期過濾：移除 {dropped} 則超過 {max_age_days} 天的舊聞", file=sys.stderr)
+
+    return kept
+
+
 async def run(
     sources: list[str],
     min_score: int = 5,
+    max_age_days: int = 7,
     dedup_store: DedupStore | None = None,
 ) -> list[NewsItem]:
     """Run all enabled sources concurrently."""
@@ -100,6 +138,9 @@ async def run(
 
     # Filter by LLM relevance and minimum score
     filtered = filter_items(all_items, min_score=min_score)
+
+    # Filter by publication date (keep only recent items)
+    filtered = filter_by_date(filtered, max_age_days=max_age_days)
 
     # In-run deduplication by URL
     seen_urls_in_run = set()
@@ -225,6 +266,10 @@ def main():
     parser.add_argument(
         "--min-score", type=int, default=5,
         help="最低分數門檻 (default: 5)",
+    )
+    parser.add_argument(
+        "--max-age-days", type=int, default=7,
+        help="只保留 N 天內發布的新聞 (default: 7, 0=不過濾)",
     )
     parser.add_argument(
         "--json", action="store_true",
@@ -368,7 +413,7 @@ def main():
         return
 
     # Run async
-    items = asyncio.run(run(args.sources, min_score=args.min_score, dedup_store=dedup_store))
+    items = asyncio.run(run(args.sources, min_score=args.min_score, max_age_days=args.max_age_days, dedup_store=dedup_store))
     items = items[: args.limit]
 
     today = datetime.now().strftime("%Y-%m-%d")
