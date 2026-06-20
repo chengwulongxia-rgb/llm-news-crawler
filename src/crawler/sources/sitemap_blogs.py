@@ -24,13 +24,9 @@ SITEMAP_SOURCES = [
         "url_excludes": ["tag/", "category/", "author/", "page/"],
         "score": 35,
     },
-    {
-        "name": "Mistral",
-        "sitemap_url": "https://mistral.ai/sitemap-0.xml",
-        "url_filters": ["/news/"],
-        "url_excludes": ["/fr/", "/it/", r"/news/?$"],  # Skip non-English + index page
-        "score": 30,
-    },
+    # Mistral removed from sitemap sources — sitemap-0.xml has no <lastmod> dates,
+    # so filter_by_date() can't filter old articles. Playwright source handles
+    # Mistral correctly via the news listing page (only shows recent articles).
 ]
 
 
