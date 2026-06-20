@@ -63,34 +63,62 @@ def format_error_output(err: FetchError, detail: str, url: str) -> str:
     return "\n".join(parts)
 
 
-def format_collector_output(items: list[NewsItem], date_str: str) -> str:
-    """Format items in collector-compatible format."""
+from dataclasses import dataclass, field
+
+
+@dataclass
+class DateFilterReport:
+    """Report from filter_by_date about what was filtered and why."""
+    no_date_items: list[str] = field(default_factory=list)  # titles of items with no date
+    old_items_dropped: list[tuple[str, str]] = field(default_factory=list)  # (title, date) of dropped items
+
+
+def format_collector_output(items: list[NewsItem], date_str: str, date_report: DateFilterReport | None = None) -> str:
+    """Format items in collector-compatible format, with optional date warnings."""
     if not items:
-        return f"=== {date_str} 新聞 ===\n本次無新資訊"
+        out = f"=== {date_str} 新聞 ===\n本次無新資訊"
+    else:
+        lines = [f"=== {date_str} 新聞 ==="]
+        for item in items:
+            lines.append(item.to_collector_line())
+        out = "\n".join(lines)
 
-    lines = [f"=== {date_str} 新聞 ==="]
-    for item in items:
-        lines.append(item.to_collector_line())
-    return "\n".join(lines)
+    # Append date filter warnings so the digest agent can flag them
+    if date_report and (date_report.no_date_items or date_report.old_items_dropped):
+        warnings = []
+        if date_report.no_date_items:
+            names = "、".join(date_report.no_date_items[:5])
+            warnings.append(f"⚠️ 日期不明（無法判斷新舊，已保留）：{names}")
+        if date_report.old_items_dropped:
+            entries = [f"{title}（{date}）" for title, date in date_report.old_items_dropped[:5]]
+            warnings.append(f"📅 已自動移除舊聞：{'；'.join(entries)}")
+        out += "\n\n" + "\n".join(warnings)
+
+    return out
 
 
-def filter_by_date(items: list[NewsItem], max_age_days: int = 7) -> list[NewsItem]:
+def filter_by_date(items: list[NewsItem], max_age_days: int = 7) -> tuple[list[NewsItem], DateFilterReport]:
     """Filter items to only those published within max_age_days.
 
-    Items without a published_at date are kept (we can't determine age).
+    Items without a published_at date are kept (we can't determine age),
+    but flagged in the returned report.
+
+    Returns (filtered_items, report).
     """
+    report = DateFilterReport()
+
     if max_age_days <= 0:
-        return items
+        return items, report
 
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=max_age_days)
 
     kept = []
-    dropped = 0
     for item in items:
         if item.published_at is None:
-            # No date info — keep it rather than silently drop
+            # No date info — keep it but flag
             kept.append(item)
+            report.no_date_items.append(item.title or item.url)
             continue
 
         pub = item.published_at
@@ -103,12 +131,13 @@ def filter_by_date(items: list[NewsItem], max_age_days: int = 7) -> list[NewsIte
         if pub >= cutoff:
             kept.append(item)
         else:
-            dropped += 1
+            date_str = pub.strftime("%Y-%m-%d")
+            report.old_items_dropped.append((item.title or item.url, date_str))
 
-    if dropped > 0:
-        print(f"📅 日期過濾：移除 {dropped} 則超過 {max_age_days} 天的舊聞", file=sys.stderr)
+    if report.old_items_dropped:
+        print(f"📅 日期過濾：移除 {len(report.old_items_dropped)} 則超過 {max_age_days} 天的舊聞", file=sys.stderr)
 
-    return kept
+    return kept, report
 
 
 async def run(
@@ -116,7 +145,7 @@ async def run(
     min_score: int = 5,
     max_age_days: int = 7,
     dedup_store: DedupStore | None = None,
-) -> list[NewsItem]:
+) -> tuple[list[NewsItem], DateFilterReport]:
     """Run all enabled sources concurrently."""
     all_items: list[NewsItem] = []
 
@@ -140,7 +169,7 @@ async def run(
     filtered = filter_items(all_items, min_score=min_score)
 
     # Filter by publication date (keep only recent items)
-    filtered = filter_by_date(filtered, max_age_days=max_age_days)
+    filtered, date_report = filter_by_date(filtered, max_age_days=max_age_days)
 
     # In-run deduplication by URL
     seen_urls_in_run = set()
@@ -173,7 +202,7 @@ async def run(
     if dedup_store is not None:
         dedup_store.mark_seen_batch([item.url for item in unique_items])
 
-    return unique_items
+    return unique_items, date_report
 
 
 def _build_fallback_search_query(url: str, article_title: str = "") -> str:
@@ -413,7 +442,7 @@ def main():
         return
 
     # Run async
-    items = asyncio.run(run(args.sources, min_score=args.min_score, max_age_days=args.max_age_days, dedup_store=dedup_store))
+    items, date_report = asyncio.run(run(args.sources, min_score=args.min_score, max_age_days=args.max_age_days, dedup_store=dedup_store))
     items = items[: args.limit]
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -426,7 +455,7 @@ def main():
             default=str,
         )
     else:
-        output = format_collector_output(items, today)
+        output = format_collector_output(items, today, date_report)
 
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
