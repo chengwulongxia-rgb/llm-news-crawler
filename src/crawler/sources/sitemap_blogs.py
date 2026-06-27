@@ -1,4 +1,4 @@
-"""Sitemap-based blog crawler for Anthropic and Mistral.
+"""Sitemap-based blog crawler for Anthropic.
 
 These sites are JS-rendered but their sitemaps are static XML.
 We extract article URLs from sitemaps, fetch each page, and parse the <title> tag.
@@ -24,9 +24,9 @@ SITEMAP_SOURCES = [
         "url_excludes": ["tag/", "category/", "author/", "page/"],
         "score": 35,
     },
-    # Mistral removed from sitemap sources — sitemap-0.xml has no <lastmod> dates,
-    # so filter_by_date() can't filter old articles. Playwright source handles
-    # Mistral correctly via the news listing page (only shows recent articles).
+    # Mistral removed from all sources — sitemap-0.xml has no <lastmod> dates,
+    # and the news listing page includes undated old articles that
+    # filter_by_date() can't filter. Removed from both sitemap and Playwright.
 ]
 
 

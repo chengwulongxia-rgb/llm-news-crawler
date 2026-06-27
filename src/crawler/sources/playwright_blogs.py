@@ -27,17 +27,6 @@ PLAYWRIGHT_SOURCES = [
         "score": 35,
         "max_articles": 10,
     },
-    {
-        "name": "Mistral",
-        "list_url": "https://mistral.ai/news/",
-        "article_selector": "a[href^='/news/']",
-        "title_selector": "h2, h3, [class*='title'], [class*='heading']",
-        "desc_selector": "p, [class*='description'], [class*='excerpt']",
-        "date_selector": "time, [class*='date'], span",
-        "base_url": "https://mistral.ai",
-        "score": 30,
-        "max_articles": 10,
-    },
 ]
 
 # URL patterns to skip (non-article pages)
