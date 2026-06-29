@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Pre-commit hook: syntax check Python sources.
+# Symlink this to .git/hooks/pre-commit
+ROOT="$(git rev-parse --show-toplevel)"
+exec bash "$ROOT/scripts/check.sh"
