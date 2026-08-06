@@ -13,8 +13,9 @@ Usage:
 import argparse
 import asyncio
 import json
+import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -42,9 +43,18 @@ def format_collector_output(items: list[NewsItem], date_str: str) -> str:
 async def run(
     sources: list[str],
     min_score: int = 5,
+    max_age_days: int | None = None,
     dedup_store: DedupStore | None = None,
 ) -> list[NewsItem]:
-    """Run all enabled sources concurrently."""
+    """Run all enabled sources concurrently.
+
+    Args:
+        sources: Source names to enable (hackernews, rss, sitemap, playwright).
+        min_score: Minimum score threshold for filtering.
+        max_age_days: If set, drop items whose published_at is older than N days.
+                      Items with no published_at are kept (can't determine age).
+        dedup_store: Optional cross-run URL deduplication store.
+    """
     all_items: list[NewsItem] = []
 
     async with httpx.AsyncClient() as client:
@@ -66,6 +76,25 @@ async def run(
     # Filter by LLM relevance and minimum score
     filtered = filter_items(all_items, min_score=min_score)
 
+    # Age filter: drop items older than max_age_days
+    if max_age_days is not None and max_age_days > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        age_filtered = []
+        dropped_old = 0
+        for item in filtered:
+            pub = item.published_at
+            if pub is not None:
+                # Normalize to UTC for comparison (some sources produce naive datetimes)
+                if pub.tzinfo is None:
+                    pub = pub.replace(tzinfo=timezone.utc)
+                if pub < cutoff:
+                    dropped_old += 1
+                    continue
+            age_filtered.append(item)
+        if dropped_old > 0:
+            print(f"⏳ 年齡過濾：丟棄 {dropped_old} 則超過 {max_age_days} 天的舊聞", file=sys.stderr)
+        filtered = age_filtered
+
     # In-run deduplication by URL
     seen_urls_in_run = set()
     unique_items = []
@@ -79,15 +108,20 @@ async def run(
     # should not be hidden just because a lower-signal source saw the URL first.
     if dedup_store is not None:
         kept = []
+        dropped_by_dedup = 0
         for item in unique_items:
             if dedup_store.is_seen(item.url):
                 # Allow through if it's a high-signal HN story
                 if item.source == "HackerNews" and item.score > 100:
                     dedup_store.mark_seen(item.url)  # refresh TTL
                     kept.append(item)
-                # else: silently dropped (normal dedup)
+                else:
+                    dropped_by_dedup += 1
+                    # else: silently dropped (normal dedup)
             else:
                 kept.append(item)
+        if dropped_by_dedup > 0:
+            print(f"🔄 去重：略過 {dropped_by_dedup} 則已見過的 URL", file=sys.stderr)
         unique_items = kept
 
     # Sort by score descending
@@ -112,6 +146,10 @@ def main():
     parser.add_argument(
         "--min-score", type=int, default=5,
         help="最低分數門檻 (default: 5)",
+    )
+    parser.add_argument(
+        "--max-age-days", type=int, default=None,
+        help="只保留 N 天內發布的文章（None = 不過濾）。有 published_at 的文章超過 N 天會被丟棄；無日期者保留。",
     )
     parser.add_argument(
         "--json", action="store_true",
@@ -159,6 +197,13 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Set up logging: dedup logs go to stderr
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format="%(name)s [%(levelname)s] %(message)s",
+        stream=sys.stderr,
+    )
 
     # Handle dedup store commands
     dedup_store = None if args.no_dedup else DedupStore()
@@ -234,7 +279,12 @@ def main():
         return
 
     # Run async
-    items = asyncio.run(run(args.sources, min_score=args.min_score, dedup_store=dedup_store))
+    items = asyncio.run(run(
+        args.sources,
+        min_score=args.min_score,
+        max_age_days=args.max_age_days,
+        dedup_store=dedup_store,
+    ))
     items = items[: args.limit]
 
     today = datetime.now().strftime("%Y-%m-%d")

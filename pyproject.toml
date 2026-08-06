@@ -6,11 +6,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4>=4.14.3",
-    "curl-cffi>=0.15.0",
+    "crawl4ai>=0.9.2",
     "httpx>=0.28",
     "lxml>=6.1.1",
     "playwright>=1.60.0",
-    "playwright-stealth>=2.0.3",
     "pydantic>=2.10",
 ]
 

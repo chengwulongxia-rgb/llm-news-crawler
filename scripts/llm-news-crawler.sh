@@ -13,4 +13,5 @@ uv sync --quiet 2>/dev/null || true
 uv run playwright install chromium 2>/dev/null || true
 
 # Run crawler — all sources: HN, RSS, Sitemap, Playwright
-exec uv run llm-crawler --min-score 10 --limit 20
+# --max-age-days 3: 只保留 3 天內發布的文章（無日期者放行）
+exec uv run llm-crawler --min-score 10 --max-age-days 3 --limit 20
