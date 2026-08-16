@@ -133,6 +133,16 @@ def _parse_pub_date_from_html(html: str) -> datetime | None:
                     return datetime.fromisoformat(content.replace("Z", "+00:00"))
                 except (ValueError, TypeError):
                     pass
+    # Fallback: try to find date in visible page text (e.g., "2026年7月24日")
+    body = soup.find("body")
+    if body:
+        body_text = body.get_text()
+        cjk_match = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", body_text)
+        if cjk_match:
+            try:
+                return datetime(int(cjk_match.group(1)), int(cjk_match.group(2)), int(cjk_match.group(3)))
+            except ValueError:
+                pass
     return None
 
 

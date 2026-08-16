@@ -122,6 +122,11 @@ def _parse_article_card_text(raw_text: str) -> dict:
             date_str = line
             date_idx = i
             break
+        # CJK format: 2026年7月24日 or 2026年07月24日
+        if re.match(r"^\d{4}年\d{1,2}月\d{1,2}日$", line):
+            date_str = line
+            date_idx = i
+            break
 
     # Category is often a short uppercase line before or after the date
     if date_idx >= 0 and not category:
@@ -179,6 +184,14 @@ def _parse_relative_date(text: str) -> datetime | None:
     """Try to parse a date string, including relative dates from time elements."""
     if not text:
         return None
+
+    # Try CJK format: 2026年7月24日
+    cjk_match = re.match(r"^(\d{4})年(\d{1,2})月(\d{1,2})日$", text.strip())
+    if cjk_match:
+        try:
+            return datetime(int(cjk_match.group(1)), int(cjk_match.group(2)), int(cjk_match.group(3)))
+        except ValueError:
+            pass
 
     # Try ISO format first (datetime attribute or text)
     for fmt in [
