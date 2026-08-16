@@ -38,17 +38,10 @@ RSS_SOURCES = [
         "date_format": "rfc2822",
         "strip_cdata": True,
     },
-    {
-        "name": "Google Research",
-        "url": "https://blog.research.google/feeds/posts/default",
-        "item_tag": "entry",
-        "title_tag": "title",
-        "link_tag": "link",
-        "desc_tag": "summary",
-        "date_tag": "published",
-        "date_format": "iso",
-        "strip_cdata": False,
-    },
+    # ⚠️ Google Research (blog.research.google) 已移除 (2026-08-16)。
+    # 部落格自 2024-03 起凍結，feed 302 轉到凍結的 FeedBurner 鏡像
+    # (feeds.feedburner.com/blogspot/gJZg)，25 個 entry 全是 2024 年舊文，
+    # 持續把舊聞灌進日報。Google AI 新聞已由上方「Google AI Blog」來源涵蓋。
     {
         "name": "ArXiv-CL",
         "url": "https://arxiv.org/rss/cs.CL",

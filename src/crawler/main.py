@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -83,6 +84,18 @@ async def run(
         dropped_old = 0
         for item in filtered:
             pub = item.published_at
+            if pub is None:
+                # Fallback: extract /YYYY/MM/ (or /YYYY/MM/DD/) from the URL.
+                # Catches frozen blogs whose feed omits dates but whose URLs
+                # encode the publish date (e.g. blog.research.google/2024/03/...).
+                m = re.search(r"/(\d{4})/(\d{1,2})(?:/(\d{1,2}))?/", item.url or "")
+                if m:
+                    try:
+                        y, mo = int(m.group(1)), int(m.group(2))
+                        d = int(m.group(3)) if m.group(3) else 1
+                        pub = datetime(y, mo, d, tzinfo=timezone.utc)
+                    except ValueError:
+                        pub = None
             if pub is not None:
                 # Normalize to UTC for comparison (some sources produce naive datetimes)
                 if pub.tzinfo is None:
