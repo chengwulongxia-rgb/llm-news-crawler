@@ -12,23 +12,24 @@ Usage:
 
 import argparse
 import asyncio
-from collections import Counter
 import json
 import logging
 import re
 import sys
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from crawler.sources.hackernews import fetch_hackernews
-from crawler.sources.rss_feeds import fetch_all_rss
-from crawler.sources.sitemap_blogs import fetch_all_sitemaps
-from crawler.sources.playwright_blogs import fetch_all_playwright
+from crawler.article_fetcher import fetch_article
+from crawler.dedup import DedupStore
 from crawler.filters import filter_items
 from crawler.models import NewsItem
-from crawler.dedup import DedupStore
-from crawler.article_fetcher import fetch_article
+from crawler.sources.ai_security_news import fetch_ai_security_news
+from crawler.sources.hackernews import fetch_hackernews
+from crawler.sources.playwright_blogs import fetch_all_playwright
+from crawler.sources.rss_feeds import fetch_all_rss
+from crawler.sources.sitemap_blogs import fetch_all_sitemaps
 
 
 def format_source_counts(items: list[NewsItem]) -> str:
@@ -58,7 +59,7 @@ async def run(
     """Run all enabled sources concurrently.
 
     Args:
-        sources: Source names to enable (hackernews, rss, sitemap, playwright).
+        sources: Source names to enable (hackernews, rss, sitemap, playwright, ai-security).
         min_score: Minimum score threshold for filtering.
         max_age_days: If set, drop items whose published_at is older than N days.
                       Items with no published_at are kept (can't determine age).
@@ -76,6 +77,8 @@ async def run(
             tasks.append(fetch_all_sitemaps(client))
         if "playwright" in sources:
             tasks.append(fetch_all_playwright())
+        if "ai-security" in sources:
+            tasks.append(fetch_ai_security_news(client))
 
         if tasks:
             results = await asyncio.gather(*tasks)
@@ -162,7 +165,7 @@ def main():
     )
     parser.add_argument(
         "--sources", nargs="+", default=["hackernews", "rss", "sitemap", "playwright"],
-        help="新聞來源: hackernews, rss, sitemap, playwright (default: all)",
+        help="新聞來源: hackernews, rss, sitemap, playwright, ai-security (預設僅一般新聞來源)",
     )
     parser.add_argument(
         "--min-score", type=int, default=5,

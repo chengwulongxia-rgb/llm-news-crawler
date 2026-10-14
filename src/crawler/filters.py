@@ -33,10 +33,9 @@ def is_llm_relevant(title: str) -> bool:
     ]
     title_lower = title.lower()
     for kw in exclude:
-        if kw.lower() in title_lower:
-            # But don't exclude if it's also clearly AI-related
-            if not any(k.lower() in title_lower for k in LLM_KEYWORDS):
-                return False
+        # But don't exclude if it's also clearly AI-related.
+        if kw.lower() in title_lower and not any(k.lower() in title_lower for k in LLM_KEYWORDS):
+            return False
 
     for kw in LLM_KEYWORDS:
         if kw.lower() in title_lower:
@@ -48,6 +47,10 @@ def filter_items(items: list, min_score: int = 5) -> list:
     """Filter items by LLM relevance and minimum score."""
     relevant = []
     for item in items:
-        if is_llm_relevant(item.title) and item.score >= min_score:
+        # The opt-in incident source already checks title AND summary for relevance.
+        # Applying the generic title-only filter again drops "AI-powered" incidents.
+        if item.score >= min_score and (
+            item.source == "AI Security Watch" or is_llm_relevant(item.title)
+        ):
             relevant.append(item)
     return relevant

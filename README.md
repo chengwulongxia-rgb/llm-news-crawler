@@ -43,6 +43,9 @@ uv run llm-crawler --min-score 10           # 只留 >= 10 分的
 uv run llm-crawler --limit 5                # 最多 5 則
 uv run llm-crawler -o /tmp/news.txt         # 輸出到檔案
 uv run llm-crawler --sources hackernews     # 只跑特定來源
+uv run llm-crawler --sources ai-security --min-score 10 --max-age-days 7
+bash scripts/ai-security-watch.sh               # 手動跑監測同款：近 3 天＋跨批去重
+# AI 資安事故候選：英文／西文 Google News，排除明顯教學文、無日期與無效網址；仍需擷取全文確認事件
 uv run llm-crawler --no-dedup               # 停用跨輪次去重
 ```
 
