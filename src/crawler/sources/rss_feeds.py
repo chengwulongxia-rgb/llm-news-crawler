@@ -64,6 +64,54 @@ RSS_SOURCES = [
         "date_format": "rfc2822",
         "strip_cdata": False,
     },
+    {
+        "name": "Simon Willison",
+        "url": "https://simonwillison.net/atom/entries/",
+        "item_tag": "entry",
+        "title_tag": "title",
+        "link_tag": "link",
+        "desc_tag": "summary",
+        "date_tag": "published",
+        "date_format": "iso",
+        "strip_cdata": False,
+        "score": 35,
+    },
+    {
+        "name": "Interconnects",
+        "url": "https://www.interconnects.ai/feed",
+        "item_tag": "item",
+        "title_tag": "title",
+        "link_tag": "link",
+        "desc_tag": "description",
+        "date_tag": "pubDate",
+        "date_format": "rfc2822",
+        "strip_cdata": False,
+        "score": 35,
+    },
+    {
+        "name": "Latent Space",
+        "url": "https://www.latent.space/feed",
+        "item_tag": "item",
+        "title_tag": "title",
+        "link_tag": "link",
+        "desc_tag": "description",
+        "date_tag": "pubDate",
+        "date_format": "rfc2822",
+        "strip_cdata": False,
+        "score": 30,
+    },
+    {
+        "name": "Sebastian Raschka",
+        "url": "https://magazine.sebastianraschka.com/feed",
+        "item_tag": "item",
+        "title_tag": "title",
+        "link_tag": "link",
+        "desc_tag": "description",
+        "date_tag": "pubDate",
+        "date_format": "rfc2822",
+        "strip_cdata": False,
+        "score": 35,
+    },
 ]
 
 # Namespaces for Atom feeds
@@ -235,7 +283,7 @@ def parse_rss_feed(xml_text: str, source_config: dict, limit: int = 20) -> list[
             title=title,
             url=url,
             source=source_name,
-            score=30,  # Official blog post, default higher score
+            score=source_config.get("score", 30),  # Source-specific editorial weight
             summary=summary,
             published_at=published_at,
         ))

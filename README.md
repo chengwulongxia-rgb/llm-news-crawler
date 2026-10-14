@@ -13,7 +13,7 @@ src/crawler/
 ├── hard_fetch.py           # 硬爬模組：arXiv 摘要、HN 討論串、智慧路由
 ├── sources/
 │   ├── hackernews.py      # HN Firebase API
-│   ├── rss_feeds.py       # RSS/Atom feeds (OpenAI, Google, ArXiv×2)
+│   ├── rss_feeds.py       # RSS/Atom feeds (官方、arXiv、獨立作者)
 │   ├── sitemap_blogs.py   # Sitemap 解析 (Anthropic, Mistral)
 │   └── playwright_blogs.py # Playwright JS 渲染 (Anthropic, Mistral)
 └── main.py                # CLI 入口 (llm-crawler)
@@ -87,11 +87,16 @@ uv run llm-crawler --no-dedup        # 本次不停用去重
 | HackerNews | Firebase API | 社群熱議 |
 | OpenAI Blog | RSS | 官方公告 |
 | Google AI Blog | RSS | Gemini/產品更新 |
-| Google Research | Atom | 研究論文 |
+| Simon Willison | Atom | 獨立開發者實作與評論 |
+| Interconnects | RSS | 獨立產業／研究分析 |
+| Latent Space | RSS | 工程訪談與 AI News 彙整（注意與原始新聞去重） |
+| Sebastian Raschka | RSS | 模型與研究技術拆解 |
 | ArXiv cs.CL | RSS | NLP 論文（平日） |
 | ArXiv cs.AI | RSS | AI 論文（平日） |
 | Anthropic Blog | Playwright 🎭 | Claude 開發（含摘要） |
 | Mistral News | Playwright 🎭 | 開源模型動態（含摘要） |
+
+每批爬取會在**文字輸出末尾**記錄 `📊 入選來源（N 則）：來源 數量…`；新聞條目仍以 `•` 開頭，`--json` 維持純 JSON。觀察接下來一週的 cron 輸出，統計新來源實際**入選**數量；它不代表所有已抓取文章（舊聞、標題未中關鍵字、超過 20 則上限的文章不計）。`--no-dedup` 可用於不影響去重紀錄的手動抽查。
 
 ## 管線整合
 

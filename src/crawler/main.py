@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import asyncio
+from collections import Counter
 import json
 import logging
 import re
@@ -28,6 +29,13 @@ from crawler.filters import filter_items
 from crawler.models import NewsItem
 from crawler.dedup import DedupStore
 from crawler.article_fetcher import fetch_article
+
+
+def format_source_counts(items: list[NewsItem]) -> str:
+    """Summarize sources of the final output, for per-run cron contribution tracking."""
+    counts = Counter(item.source for item in items)
+    detail = "、".join(f"{name} {counts[name]}" for name in sorted(counts)) or "無"
+    return f"📊 入選來源（{len(items)} 則）：{detail}"
 
 
 def format_collector_output(items: list[NewsItem], date_str: str) -> str:
@@ -310,7 +318,7 @@ def main():
             default=str,
         )
     else:
-        output = format_collector_output(items, today)
+        output = format_collector_output(items, today) + "\n" + format_source_counts(items)
 
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
