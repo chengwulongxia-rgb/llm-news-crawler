@@ -89,7 +89,7 @@ bash scripts/noon-digest.sh
 
 只有正體中文單行摘要交給模型。`scripts/digest_summarize.py` 讀取既有工作的 model/provider，使用 Hermes SDK、空工具清單、不載入專案規則／記憶／人格；目前需要工作已有明確 model/provider，缺少即失敗，不自作主張改模型。摘要只能回每個固定 id 的映射；時間、網址、編號、總數、分類與案例狀態一律由程式產生。
 
-`digest.py` 的硬檢查涵蓋：當次實際台北時間、宣告總數、連續編號、URL 順序／唯一性、摘要不得注入新 URL 或編號。一般新聞保持簡潔，候選才多顯示分類與短線索；所有實驗維持 `not_run`。結果、manifest、模型摘要映射、validation 分別存在忽略 Git 的 `data/digests/<時間>/`。寫檔或驗證失敗會 stderr 明報、非零退出，**不輸出可送出的通知清單**。
+`digest.py` 的硬檢查涵蓋：當次實際台北時間、宣告總數、連續編號、URL 順序／唯一性、摘要不得注入新 URL 或編號。一般新聞保持簡潔，候選才顯示分類或實作所需的材料缺口；英文摘錄與例行「未查證」備註留在 manifest，不逐篇刷通知。已處理的舊文只彙總排除數，未解決的資料異常仍明示；所有實驗在紀錄內維持 `not_run`，通知以「案例尚未實作」說明。結果、manifest、模型摘要映射、validation 分別存在忽略 Git 的 `data/digests/<時間>/`。寫檔或驗證失敗會 stderr 明報、非零退出，**不輸出可送出的通知清單**。
 
 中午 cron 保留原時間、delivery 與模型欄位，改成 `no_agent=true` 執行已驗證的程式 stdout，不再讓外層代理自由重寫。模型仍在程式內沿用既有設定做摘要，不是取消摘要模型。`cron/noon-digest-prompt.md` 現為執行／審計說明。
 

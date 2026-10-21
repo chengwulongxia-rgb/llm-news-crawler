@@ -233,7 +233,7 @@ def test_render_owns_count_time_ids_urls_and_only_displays_unrun_proposals(tmp_p
     assert "授權未核對" in text
     assert "最小對照" in text
     assert "MUST NOT INVENT THIS CASE" not in text
-    assert "全部 not_run" in text
+    assert "案例尚未實作" in text
 
 
 @pytest.mark.parametrize(

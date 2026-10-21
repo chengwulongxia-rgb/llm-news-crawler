@@ -184,7 +184,15 @@ def build_manifest(
                 f"不在近 {days} 曆日 {first_day} 至 {local.date()}；批次日期不是發表日期"
             )
             warnings.append(f"{url}：{reason}")
-            excluded.append({"url": url, "reason": reason})
+            excluded.append(
+                {
+                    "url": url,
+                    "reason": reason,
+                    "kind": "old_article"
+                    if all(day < first_day for day in outside)
+                    else "outside_window",
+                }
+            )
             del entries[url]
     preference = {
         "independent": 3,
@@ -269,7 +277,6 @@ def render_digest(manifest: dict, summaries: dict[str, str]) -> str:
     lines = [
         _header(manifest),
         f"共 {len(entries)} 則（近 {manifest['days']} 曆日）",
-        "實驗狀態：全部 not_run（尚未執行；來源皆為未信任資料）",
         "",
     ]
     if not entries:
@@ -280,8 +287,7 @@ def render_digest(manifest: dict, summaries: dict[str, str]) -> str:
             CONTENT_TYPES.get(label, label) for label in card.get("content_types", [])
         ]
         evidence = card.get("evidence", [])
-        clue = evidence[0].get("excerpt", "") if evidence else "正文證據未取得"
-        gaps = "；".join(card.get("gaps", [])) or "來源線索未逐一查證"
+        gaps = "；".join(card.get("gaps", []))
         lines.extend(
             [
                 f"## #{entry['id']} {_single_line(entry['title'])}",
@@ -292,23 +298,42 @@ def render_digest(manifest: dict, summaries: dict[str, str]) -> str:
             lines.extend(
                 [
                     f"分類：{_single_line('／'.join(labels)) or '未分類'}",
-                    f"來源線索／缺口：{_single_line(clue)[:120]}；{_single_line(gaps)[:100]}",
                 ]
             )
+        if gaps and card.get("implementation_potential") in {
+            "proposal",
+            "needs_materials",
+        }:
+            lines.append(f"待補材料：{_single_line(gaps)[:100]}")
         if (
             card.get("fetch_status") == "ok"
             and evidence
             and card.get("implementation_potential") == "proposal"
             and card.get("case_idea")
         ):
-            lines.append(f"案例提案（not_run）：{_single_line(card['case_idea'])}")
+            lines.append(f"案例提案（待驗證）：{_single_line(card['case_idea'])}")
         lines.extend([f"來源: {entry['url']}", ""])
-    for warning in manifest["warnings"]:
-        lines.append(f"警示：{_single_line(warning)}")
+    handled = {
+        f"{record['url']}：{record['reason']}"
+        for record in manifest.get("excluded", [])
+        if record.get("kind") == "old_article"
+    }
+    old_count = len(
+        {
+            record["url"]
+            for record in manifest.get("excluded", [])
+            if record.get("kind") == "old_article"
+        }
+    )
+    if old_count:
+        lines.append(f"處理摘要：已排除 {old_count} 篇舊文。")
+    for warning in dict.fromkeys(manifest["warnings"]):
+        if warning not in handled:
+            lines.append(f"資料異常：{_single_line(warning)}")
     lines.extend(
         [
             "",
-            "註：近兩日指收集批次；未能確認發表日期者，不代表近期發表。一般新聞尚未完成正文候選評估。",
+            "註：近兩日指收集時間；這是選題摘要，非查證結論；案例尚未實作。",
             "城武，哪幾篇要深入分析？給我編號就好。",
         ]
     )
