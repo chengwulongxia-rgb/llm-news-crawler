@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Private fetched article snapshots and generated candidate reports
+/data/

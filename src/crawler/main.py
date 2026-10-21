@@ -18,6 +18,7 @@ import re
 import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import httpx
 
@@ -55,6 +56,7 @@ async def run(
     min_score: int = 5,
     max_age_days: int | None = None,
     dedup_store: DedupStore | None = None,
+    discovery_pool: list[NewsItem] | None = None,
 ) -> list[NewsItem]:
     """Run all enabled sources concurrently.
 
@@ -85,8 +87,8 @@ async def run(
             for result in results:
                 all_items.extend(result)
 
-    # Filter by LLM relevance and minimum score
-    filtered = filter_items(all_items, min_score=min_score)
+    # Age-gate the discovery pool before the daily headline/heat gate.
+    filtered = all_items
 
     # Age filter: drop items older than max_age_days
     if max_age_days is not None and max_age_days > 0:
@@ -118,6 +120,10 @@ async def run(
         if dropped_old > 0:
             print(f"⏳ 年齡過濾：丟棄 {dropped_old} 則超過 {max_age_days} 天的舊聞", file=sys.stderr)
         filtered = age_filtered
+
+    if discovery_pool is not None:
+        discovery_pool.extend(filtered)
+    filtered = filter_items(filtered, min_score=min_score)
 
     # In-run deduplication by URL
     seen_urls_in_run = set()
@@ -220,7 +226,16 @@ def main():
         help="顯示 fetch 失敗的詳細原因（stderr）",
     )
 
+    parser.add_argument("--deep-dive-output", type=Path, help="另寫深挖候選 JSON（同名 .md 與正文快照），不改新聞 stdout")
+    parser.add_argument("--deep-dive-budget", type=int, default=12, help="深挖正文擷取上限（1–40，預設 12）；不看新聞熱度門檻")
     args = parser.parse_args()
+    if args.deep_dive_output:
+        if args.deep_dive_output.suffix != ".json" or not 1 <= args.deep_dive_budget <= 40:
+            parser.error("深挖輸出須為 .json，正文預算須介於 1–40")
+        if args.fetch or args.fetch_smart or args.fetch_batch or args.clear_dedup or args.dedup_stats:
+            parser.error("深挖輸出僅適用新聞蒐集模式")
+        if args.output and Path(args.output).resolve() in {args.deep_dive_output.resolve(), args.deep_dive_output.with_suffix('.md').resolve()}:
+            parser.error("新聞輸出不可覆寫深挖 JSON／Markdown")
 
     # Set up logging: dedup logs go to stderr
     logging.basicConfig(
@@ -302,12 +317,14 @@ def main():
         print(f"\n---\n📊 成功 {success_count}/{len(urls)} 篇", file=sys.stderr)
         return
 
-    # Run async
+    # Run async; discovery gets its own pre-heat/pre-news-dedup pool.
+    discovery_pool = [] if args.deep_dive_output else None
     items = asyncio.run(run(
         args.sources,
         min_score=args.min_score,
         max_age_days=args.max_age_days,
         dedup_store=dedup_store,
+        discovery_pool=discovery_pool,
     ))
     items = items[: args.limit]
 
@@ -328,7 +345,25 @@ def main():
             f.write(output + "\n")
         print(f"✅ 已輸出 {len(items)} 則新聞到 {args.output}", file=sys.stderr)
     else:
-        print(output)
+        print(output, flush=True)
+
+    # News is already delivered; optional candidate failures must not consume it.
+    if args.deep_dive_output:
+        from crawler.discovery import create_report
+
+        try:
+            report = asyncio.run(create_report(
+                discovery_pool or [], args.deep_dive_output, budget=args.deep_dive_budget
+            ))
+        except (OSError, ValueError) as exc:
+            print(
+                f"⚠️ 深挖候選失敗：{args.deep_dive_output}；{type(exc).__name__}: {exc}；"
+                "新聞已輸出，候選檔可能不完整或仍為舊版，請勿視為本批成功報告",
+                file=sys.stderr,
+            )
+        else:
+            stats = report["stats"]
+            print(f"🔎 深挖候選：正文 {stats['ok']}/{stats['fetched']}，失敗 {stats['failed']}，待驗證提案 {stats['proposals']}；{args.deep_dive_output}", file=sys.stderr)
 
 
 if __name__ == "__main__":

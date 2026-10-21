@@ -14,4 +14,7 @@ uv run playwright install chromium 2>/dev/null || true
 
 # Run crawler — all sources: HN, RSS, Sitemap, Playwright
 # --max-age-days 3: 只保留 3 天內發布的文章（無日期者放行）
-exec uv run llm-crawler --min-score 10 --max-age-days 3 --limit 20
+DISCOVERY_DIR="$PROJECT_DIR/data/deep-dive"
+BATCH=$(TZ='Asia/Taipei' date +%Y-%m-%d_%H%M%S)
+exec uv run llm-crawler --min-score 10 --max-age-days 3 --limit 20 \
+    --deep-dive-output "$DISCOVERY_DIR/$BATCH.json" --deep-dive-budget 12

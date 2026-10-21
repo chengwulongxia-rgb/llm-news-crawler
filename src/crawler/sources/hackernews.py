@@ -61,6 +61,7 @@ def _item_to_news(item: dict) -> NewsItem:
         comments=item.get("descendants", 0),
         author=item.get("by", ""),
         published_at=published_at,
+        discussion_url=HN_ITEM_URL.format(id=item.get("id")),
     )
 
 

@@ -15,6 +15,7 @@ class NewsItem(BaseModel):
     author: str = Field(default="", description="發布者")
     published_at: datetime | None = Field(default=None, description="發布時間")
     summary: str = Field(default="", description="簡短摘要")
+    discussion_url: str = Field(default="", description="原始社群討論串（不取代文章 URL）")
 
     def to_collector_line(self) -> str:
         """Format as collector output line for the cron pipeline."""
