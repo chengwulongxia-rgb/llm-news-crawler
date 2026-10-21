@@ -77,6 +77,24 @@ uv run llm-crawler --min-score 10 --max-age-days 3 --limit 20 --no-dedup \
 
 測試：`uv run --with pytest pytest tests/ -q`。
 
+### 中午通知品質檢查（程式掌握結構）
+
+```bash
+uv run llm-digest --job-id e0349bb0f3b1
+# 同款 cron 入口：
+bash scripts/noon-digest.sh
+```
+
+這個指令使用**既有本機收集資料**，不重新爬網。近兩個台北曆日的新聞與候選先合併為 manifest，以原 URL 精確去重；同一候選先挑成功且有證據的版本，再挑較新評估，不以更多關鍵詞誤判蓋過新版修正。可判定的數字／英文月份／日期 slug 舊文會排除並留下警示及 excluded 紀錄；不能判定的日期不擅自補齊，近兩日只保證收集批次範圍。
+
+只有正體中文單行摘要交給模型。`scripts/digest_summarize.py` 讀取既有工作的 model/provider，使用 Hermes SDK、空工具清單、不載入專案規則／記憶／人格；目前需要工作已有明確 model/provider，缺少即失敗，不自作主張改模型。摘要只能回每個固定 id 的映射；時間、網址、編號、總數、分類與案例狀態一律由程式產生。
+
+`digest.py` 的硬檢查涵蓋：當次實際台北時間、宣告總數、連續編號、URL 順序／唯一性、摘要不得注入新 URL 或編號。一般新聞保持簡潔，候選才多顯示分類與短線索；所有實驗維持 `not_run`。結果、manifest、模型摘要映射、validation 分別存在忽略 Git 的 `data/digests/<時間>/`。寫檔或驗證失敗會 stderr 明報、非零退出，**不輸出可送出的通知清單**。
+
+中午 cron 保留原時間、delivery 與模型欄位，改成 `no_agent=true` 執行已驗證的程式 stdout，不再讓外層代理自由重寫。模型仍在程式內沿用既有設定做摘要，不是取消摘要模型。`cron/noon-digest-prompt.md` 現為執行／審計說明。
+
+Hermes SDK 使用安裝的 `hermes --print-runtime-command` 機器介面取得 bootstrap，再以固定 `run_path` 入口執行摘要 worker；不固定可能被依賴 GC 清掉的 Python 版本路徑。未知 launcher 協定直接失敗，不嘗試執行任意來源指令。這個整合需要目前支援該介面的 Hermes source 安裝。
+
 ### 單篇文章擷取 (NEW!)
 
 ```bash

@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 llm-crawler = "crawler.main:main"
+llm-digest = "crawler.digest_cli:main"
 
 [build-system]
 requires = ["setuptools>=75"]
